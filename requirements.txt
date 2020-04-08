@@ -1,0 +1,4 @@
+vectra-api-tools
+requests
+validators
+urllib3
