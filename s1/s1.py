@@ -132,6 +132,17 @@ def poll_vectra(tag=None, tc=None):
     #  Need to unionize to remove duplicates
     return host_dict
 
+def update_cognito_host_tags(hostid=None, tags=None):
+    vc_host_tags = VC.get_host_tags(host_id=hostid).json()['tags']
+    
+    # Only tags with this prefix are touched. All other tags are untouched.
+    tag_prefix_update_allow = "S1"
+
+    untouched_tags = list(filter(lambda t: not t.startswith(tag_prefix_update_allow), vc_host_tags))
+    tags.extend(untouched_tags)
+
+    VC.set_host_tags(host_id=hostid, tags=[], append=False)
+    VC.set_host_tags(host_id=hostid, tags=tags, append=False)
 
 def update_cognito_notes(hostid, notes):
     cognito_note_header = {
@@ -172,11 +183,12 @@ def main():
                     )
                 )
             )
-            #  VC.set_host_notes(host_id=hostid, notes=notes, append=True)
+
+            VC.set_host_notes(host_id=hostid, notes=notes, append=True)
             update_cognito_notes(hostid, notes)
 
-        # VC.set_host_tags(host_id=hostid, tags=[], append=False)
-        VC.set_host_tags(host_id=hostid, tags=tag_list, append=False)
+        # Update Cognito host tags, without touching existing tags.
+        update_cognito_host_tags(hostid=hostid, tags=tag_list)
 
     if args.blocktag:
         hosts = poll_vectra(args.blocktag)
