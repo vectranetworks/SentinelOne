@@ -5,6 +5,10 @@ Contextual information is obtained from SentinelOne and applied to a host in the
 by adding a specified tag to a host, or automatically based on the host's Threat and Certainty scoring.
 Host enforcement (blocking/unblocking) can be triggered by manually adding a specified tag to a host.
 
+# Fork extra features
+
+- Only SentinelOne tags with a "S1" prefix are appended/removed from the Cognito host. Existing tags are untouched. This allows the use of custom host tags without being overriden. 
+
 ## Prerequisites
 
 Python3, requests, Vectra API Tools (vat), validators, and urllib modules.
