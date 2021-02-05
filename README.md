@@ -3,11 +3,12 @@
 s1.py is a python script that provides an API level integration between SentinelOne and Cognito Detect.
 Contextual information is obtained from SentinelOne and applied to a host in the form of tags.  This is triggered manually
 by adding a specified tag to a host, or automatically based on the host's Threat and Certainty scoring.
-Host enforcement (blocking/unblocking) can be triggered by manually adding a specified tag to a host.
+Host enforcement (blocking/unblocking) can be triggered by manually adding a specified tag to a host or automatically by pre-defining a minimum Threat and Certainty scoring threshold.
 
-# Fork extra features
+# Features
 
-- Only SentinelOne tags with a "S1" prefix are appended/removed from the Cognito host. Existing tags are untouched. This allows the use of custom host tags without being overriden. 
+- Only SentinelOne tags with a "S1" prefix are appended/removed from the Cognito host. Existing tags are untouched. This allows the use of custom host tags without being overriden.
+- Auto-blocking of SentinelOne hosts when a pre-defined Threat and Certainty scoring minimum is met by a host.
 
 ## Prerequisites
 
@@ -40,10 +41,10 @@ Edit the config.py file and adjust the required variables according to your envi
 
 When ran, the script needs to supplied one or more parameters.  Examples:
 
-
 ```
 s1 --tag S1_context
 s1 --tag S1_context --tc 75 75
+s1 --tag S1_context --tc 75 75 --tcautoblock 90 100
 ```
 
 The --tag flag will query Detect for active hosts that have the specified tag (S1_context in this example), 
@@ -52,18 +53,29 @@ obtain contextual information from SentinelOne, and apply the contextual informa
 The --tc flag allows a Host's Threat and Certainty scoring thresholds to be supplied for contextual tagging.  Flags can
 be combined.
 
-### Typical Usage
+The --tcautoblock flag allows a Host's Threat and Certainty scoring minimum threshold to perform an auto-block of S1 agent. These values should always be higher than the --tc flag. 
 
+### Usage
+**Example typical usage**
 ```
 s1 --tag S1_context --tc 75 75 --blocktag S1_block --unblocktag S1_unblock
 ```
-Specifying multiple flags allows the integration to cover multiple use cases. 
+Specifying multiple flags allows the integration to cover multiple use cases.
+
+**Example usage when auto-blocking of S1 agent is required**
+ 
+```
+s1 --tag S1_context --tc 75 75 --tcautoblock 90 100 --blocktag S1_block --unblocktag S1_unblock
+```
+
+The Host's Threat and Certainty scoring minimum threshold can be provided. 
 
 ### Recommendations
 
 To test the desired use cases, run the s1.py script from the CLI for testing.  To run in production, the script is
  designed to be called via a cron job.
  
+The auto-blocking of S1 agents should be used with care. The recommendation is not to set the threat/certainty threshold too low, to prevent multiple S1 hosts from being directly blocked by for example false positives detections.    
  
 ## Help Output
 

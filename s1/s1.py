@@ -3,13 +3,13 @@ __version__ = '1.0'
 __copyright__ = 'Vectra AI, Inc.'
 __status__ = 'Production'
 
-
 import argparse
 import logging
 import json
 import logging.handlers
 import os
 import sys
+from datetime import datetime
 try:
     import requests
     import urllib
@@ -52,6 +52,8 @@ def obtain_args():
                                      epilog='')
     parser.add_argument('--tc', type=int, nargs=2, default=False,
                         help='Poll for hosts with threat and certainty scores >=, eg --tc 50 50')
+    parser.add_argument('--tcautoblock', type=int, nargs=2, default=False,
+                        help='Auto block S1 agents if threat and certainty scores >=, eg --tcautoblock 80 100.')
     parser.add_argument('--tag', type=str, nargs=1, default=False, help='Host Tag for pulling context from SentinelOne')
     parser.add_argument('--blocktag', type=str, nargs=1, default=False)
     parser.add_argument('--unblocktag', type=str, nargs=1, default=False)
@@ -118,17 +120,20 @@ def gen_s1_threat_url(computer_name):
 
 
 def poll_vectra(tag=None, tc=None):
-    #  Supplied with tag and/or threat/certainty scores, returns dict of host_id:IP
+    #  Supplied with tag and/or threat/certainty scores, returns dict of host_id:host
     host_dict = {}
+    hosts = []
+
     if tag:
-        tagged_hosts = VC.get_hosts(state='active', tags=tag).json()['results']
-        for host in tagged_hosts:
-            host_dict.update({host['id']: host['last_source']})
+        hosts = VC.get_hosts(state='active', tags=tag).json()['results']
+
     if tc:
         t, c = tc[0], tc[1]
-        tc_hosts = VC.get_hosts(state='active', threat_gte=int(t), certainty_gte=int(c)).json()['results']
-        for host in tc_hosts:
-            host_dict.update({host['id']: host['last_source']})
+        hosts = VC.get_hosts(state='active', threat_gte=int(t), certainty_gte=int(c)).json()['results']
+
+    for host in hosts:
+        host_dict.update({host['id']: host})
+
     #  Need to unionize to remove duplicates
     return host_dict
 
@@ -143,6 +148,42 @@ def update_cognito_host_tags(hostid=None, tags=None):
 
     VC.set_host_tags(host_id=hostid, tags=[], append=False)
     VC.set_host_tags(host_id=hostid, tags=tags, append=False)
+
+def add_host_note(hostid, note):
+    log_event = "{}: {}".format(datetime.now().strftime("%d%m%y"), note)
+    print(log_event)
+    VC.set_host_note(host_id=hostid, note=log_event, append=True)
+
+def auto_block_s1_agents(hosts, tc_autoblock, blocktag):
+    # Supplied hosts will be auto-blocked, if TC autoblock criteria are met.
+    hosts_blocked = []
+
+    for hostid in hosts.keys():
+        host_ip_address = hosts[hostid]['last_source']
+        host_threat = hosts[hostid]['threat']
+        host_certainty = hosts[hostid]['certainty']
+        host_tags = hosts[hostid]['tags']
+
+        host_threat_minimum = tc_autoblock[0]
+        host_certainty_minimum = tc_autoblock[1]
+
+        if host_threat >= host_threat_minimum and host_certainty >= host_certainty_minimum:
+            add_host_note(hostid, 'Auto-blocking S1 agent {} - threat/certainty [{}/{}] => autoblock [{}/{}]'.format(host_ip_address, host_threat, host_certainty, host_threat_minimum, host_certainty_minimum))
+            VC.set_host_tags(host_id=hostid, tags=[blocktag], append=True)
+            block_s1_agent(host_ip_address)
+            hosts_blocked.append(hostid)
+
+    return hosts_blocked
+
+def block_s1_agent(host_ip_address):
+    s1_uuid = get_s1_agent_id(host_ip_address)
+    print('Blocking S1_ID: {}'.format(s1_uuid))
+    set_s1_agent(s1_uuid, 'disconnect')
+
+def unblock_s1_agent(host_ip_address):
+    s1_uuid = get_s1_agent_id(host_ip_address)
+    print('Unblocking S1_ID: {}'.format(s1_uuid))
+    set_s1_agent(s1_uuid, 'connect')
 
 def update_cognito_notes(hostid, notes):
     cognito_note_header = {
@@ -173,40 +214,45 @@ def main():
     hosts = poll_vectra(args.tag, args.tc)
 
     for hostid in hosts.keys():
-        print('hosts_id:{}'.format(hosts[hostid]))
-        tag_list = get_s1_agent_tags(hosts[hostid])
+        host_ip_address = hosts[hostid]['last_source']
+        print('hosts_id:{}'.format(host_ip_address))
+        tag_list = get_s1_agent_tags(host_ip_address)
         if tag_list[0] != 'S1_NoAgent' and tag_list[3] != 'S1_infected: False':
             notes = gen_s1_threat_url(
                 get_s1_computer_name(
                     get_s1_agent_id(
-                        hosts[hostid]
+                        host_ip_address
                     )
                 )
             )
 
-            VC.set_host_notes(host_id=hostid, notes=notes, append=True)
+            VC.set_host_note(host_id=hostid, note=notes, append=True)
             update_cognito_notes(hostid, notes)
 
         # Update Cognito host tags, without touching existing tags.
         update_cognito_host_tags(hostid=hostid, tags=tag_list)
 
+    if args.tcautoblock:
+        hosts_blocked = auto_block_s1_agents(hosts, args.tcautoblock, args.blocktag)
+
+        if len(hosts_blocked) > 0:
+            print('A total of ' + str(len(hosts_blocked)) + ' are automatically blocked')
+
     if args.blocktag:
         hosts = poll_vectra(args.blocktag)
         for hostid in hosts.keys():
-            s1_uuid = get_s1_agent_id(hosts[hostid])
-            print('Blocking S1_ID: {}'.format(s1_uuid))
-            set_s1_agent(s1_uuid, 'disconnect')
-            tag_list = get_s1_agent_tags(hosts[hostid])
+            host_ip_address = hosts[hostid]['last_source']
+            block_s1_agent(host_ip_address)
+            tag_list = get_s1_agent_tags(host_ip_address)
             VC.set_host_tags(host_id=hostid, tags=tag_list, append=False)
+
     if args.unblocktag:
         hosts = poll_vectra(args.unblocktag)
         for hostid in hosts.keys():
-            s1_uuid = get_s1_agent_id(hosts[hostid])
-            print('Unblocking S1_ID: {}'.format(s1_uuid))
-            set_s1_agent(s1_uuid, 'connect')
-            tag_list = get_s1_agent_tags(hosts[hostid])
+            host_ip_address = hosts[hostid]['last_source']
+            unblock_s1_agent(host_ip_address)
+            tag_list = get_s1_agent_tags(host_ip_address)
             VC.set_host_tags(host_id=hostid, tags=tag_list, append=False)
-
 
 if __name__ == '__main__':
     main()
